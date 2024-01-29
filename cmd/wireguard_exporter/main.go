@@ -3,28 +3,45 @@
 package main
 
 import (
-	"flag"
 	"log"
 	"net/http"
 	"os"
 	"strings"
-	"time"
+
+	"github.com/go-kit/log/level"
+
+	"github.com/alecthomas/kingpin/v2"
 
 	wireguardexporter "github.com/mdlayher/wireguard_exporter"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"github.com/prometheus/common/promlog"
+	"github.com/prometheus/common/promlog/flag"
+	"github.com/prometheus/common/version"
+	"github.com/prometheus/exporter-toolkit/web"
+	"github.com/prometheus/exporter-toolkit/web/kingpinflag"
 	"golang.zx2c4.com/wireguard/wgctrl"
 )
 
 func main() {
+
 	var (
-		metricsAddr = flag.String("metrics.addr", ":9586", "address for WireGuard exporter")
-		metricsPath = flag.String("metrics.path", "/metrics", "URL path for surfacing collected metrics")
-		wgPeerNames = flag.String("wireguard.peer-names", "", `optional: comma-separated list of colon-separated public keys and friendly peer names, such as: "keyA:foo,keyB:bar"`)
-		wgPeerFile  = flag.String("wireguard.peer-file", "", "optional: path to TOML friendly peer names mapping file; takes priority over -wireguard.peer-names")
+		toolkitFlags = kingpinflag.AddFlags(kingpin.CommandLine, ":9586")
+		metricsPath  = kingpin.Flag("metrics.path", "URL path for surfacing collected metrics").Default("/metrics").String()
+		wgPeerNames  = kingpin.Flag("wireguard.peer-names", `optional: comma-separated list of colon-separated public keys and friendly peer names, such as: "keyA:foo,keyB:bar"`).Default("").String()
+		wgPeerFile   = kingpin.Flag("wireguard.peer-file", "optional: path to TOML friendly peer names mapping file; takes priority over -wireguard.peer-names").Default("").String()
 	)
 
-	flag.Parse()
+	promlogConfig := &promlog.Config{}
+	flag.AddFlags(kingpin.CommandLine, promlogConfig)
+	kingpin.Version(version.Print("wireguard_exporter"))
+	kingpin.CommandLine.UsageWriter(os.Stdout)
+	kingpin.HelpFlag.Short('h')
+	kingpin.Parse()
+	logger := promlog.New(promlogConfig)
+
+	level.Info(logger).Log("starting wireguard_exporter on %q ",
+		*toolkitFlags)
 
 	client, err := wgctrl.New()
 	if err != nil {
@@ -81,14 +98,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle(*metricsPath, promhttp.Handler())
 
-	// Start listening for HTTP connections.
-	log.Printf("starting WireGuard exporter on %q", *metricsAddr)
-	server := http.Server{
-		Addr:         *metricsAddr,
-		Handler:      mux,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+	server := &http.Server{}
+	if err := web.ListenAndServe(server, toolkitFlags, logger); err != nil {
+		level.Error(logger).Log("err", err)
+		os.Exit(1)
 	}
+
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("cannot start WireGuard exporter: %s", err)
 	}
