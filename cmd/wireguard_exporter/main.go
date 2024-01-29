@@ -40,9 +40,6 @@ func main() {
 	kingpin.Parse()
 	logger := promlog.New(promlogConfig)
 
-	level.Info(logger).Log("starting wireguard_exporter on %q ",
-		*toolkitFlags)
-
 	client, err := wgctrl.New()
 	if err != nil {
 		log.Fatalf("failed to open WireGuard control client: %v", err)
@@ -94,9 +91,10 @@ func main() {
 	c := wireguardexporter.New(client.Devices, peerNames)
 	prometheus.MustRegister(c)
 
-	// Set up HTTP handler for metrics.
-	mux := http.NewServeMux()
-	mux.Handle(*metricsPath, promhttp.Handler())
+	http.Handle(*metricsPath, promhttp.Handler())
+	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, *metricsPath, http.StatusMovedPermanently)
+	})
 
 	server := &http.Server{}
 	if err := web.ListenAndServe(server, toolkitFlags, logger); err != nil {
@@ -104,7 +102,4 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := server.ListenAndServe(); err != nil {
-		log.Fatalf("cannot start WireGuard exporter: %s", err)
-	}
 }
